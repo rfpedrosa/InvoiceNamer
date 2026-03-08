@@ -1,0 +1,31 @@
+# Python virtual environment
+.invoice_ocr_venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment variables
+.env
+.env.local
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+/tmp/
+
+# Test files (if you add any)
+test_images/
+test_output/
+
+# Logs
+*.log
