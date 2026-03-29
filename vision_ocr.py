@@ -10,36 +10,29 @@ from Vision import (
     VNRecognizeTextRequest,
     VNImageRequestHandler,
 )
-from Quartz import (
-    CIImage,
-    NSURL,
-)
+from Quartz import NSURL
 
 
 def recognize_text(image_path: str) -> str:
     """
     Perform OCR on an image using Apple's Vision framework.
-    
+
     Args:
         image_path: Path to the image file
-        
+
     Returns:
         Extracted text as a single string
     """
     file_url = NSURL.fileURLWithPath_(image_path)
-    ci_image = CIImage.imageWithContentsOfURL_(file_url)
-    
-    if ci_image is None:
-        print(f"Error: Could not load image from {image_path}", file=sys.stderr)
-        return ""
-    
+
     # Create a text recognition request
     request = VNRecognizeTextRequest.alloc().init()
     request.setRecognitionLevel_(1)  # 1 = accurate (vs. 0 = fast)
+    request.setRecognitionLanguages_(["pt-PT", "pt-BR", "en-US"])
     request.setUsesLanguageCorrection_(True)
-    
-    # Create request handler and perform the request
-    handler = VNImageRequestHandler.alloc().initWithCIImage_options_(ci_image, None)
+
+    # initWithURL respects EXIF orientation (phone photos are often rotated)
+    handler = VNImageRequestHandler.alloc().initWithURL_options_(file_url, None)
     success = handler.performRequests_error_([request], None)
     
     if not success[0]:

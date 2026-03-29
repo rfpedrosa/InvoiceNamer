@@ -202,18 +202,45 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
     echo "   -> OCR Content: $file_content"
 
     # 2. FIND DATE (REGEX)
-    # Priority 1: YYYY-MM-DD
+    extracted_date=""
+
+    # Priority 1: YYYY-MM-DD (also catches terminal timestamps like 2026-03-2113:28 via head)
     extracted_date=$(echo "$file_content" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)
 
-    # Priority 2: DD/MM/YYYY (European style) -> convert to YYYY-MM-DD
+    # Priority 2: DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY -> convert to YYYY-MM-DD
+    # (requires 4-digit year at end so terminal lines like "26-03-27 20:48" don't match)
     if [ -z "$extracted_date" ]; then
-        alt_date=$(echo "$file_content" | grep -oE '[0-9]{2}/[0-9]{2}/[0-9]{4}' | head -n 1)
+        alt_date=$(echo "$file_content" | grep -oE '[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{4}' | head -n 1)
         if [ ! -z "$alt_date" ]; then
-             extracted_date=$(echo "$alt_date" | awk -F/ '{print $3"-"$2"-"$1}')
+            extracted_date=$(echo "$alt_date" | sed 's|[/.]|-|g' | awk -F- '{print $3"-"$2"-"$1}')
         fi
     fi
 
-    # Priority 3: File Creation Date
+    # Priority 3: YY-MM-DD followed by time (e.g. "26-03-13 21:18") -> prepend century
+    if [ -z "$extracted_date" ]; then
+        short_date=$(echo "$file_content" | grep -oE '[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{2} *[0-9]{2}[;:][0-9]{2}' | head -n 1)
+        if [ ! -z "$short_date" ]; then
+            date_part=$(echo "$short_date" | grep -oE '^[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{2}')
+            extracted_date=$(echo "$date_part" | sed 's|[/.]|-|g' | awk -F- '{print "20"$1"-"$2"-"$3}')
+        fi
+    fi
+
+    # Priority 4: Partial date -MM-DD or MM-DD followed by time (OCR truncated year)
+    # Assumes current year
+    if [ -z "$extracted_date" ]; then
+        partial_date=$(echo "$file_content" | grep -oE '[-]?[0-9]{2}-[0-9]{2} *[0-9]{2}[;:][0-9]{2}' | head -n 1)
+        if [ ! -z "$partial_date" ]; then
+            mm_dd=$(echo "$partial_date" | grep -oE '[0-9]{2}-[0-9]{2}' | head -n 1)
+            current_year=$(date +%Y)
+            month="${mm_dd%%-*}"
+            day="${mm_dd##*-}"
+            if [ "$month" -ge 1 ] && [ "$month" -le 12 ] && [ "$day" -ge 1 ] && [ "$day" -le 31 ]; then
+                extracted_date="${current_year}-${month}-${day}"
+            fi
+        fi
+    fi
+
+    # Priority 5: File Creation Date
     if [ -z "$extracted_date" ]; then
         echo "   -> No date found in text. Using file creation date."
         file_date=$(stat -f "%SB" -t "%Y-%m-%d" "$file")
@@ -223,18 +250,28 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
     fi
 
     # 3. DETERMINE TYPE (Based on content keywords)
-    if echo "$file_content" | grep -q "amazon"; then
-        inv_type="Amazon"
-    elif echo "$file_content" | grep -qE "combustivel|gasoleo|galp|prio"; then
+    if echo "$file_content" | grep -qiE "combustivel|gasoleo|gasolina|galp|prio|repsol|shell|bp |cepsa|posto de abastecimento"; then
         inv_type="Gasoleo"
-    elif echo "$file_content" | grep -q "adobe"; then
+    elif echo "$file_content" | grep -qiE "farmacia|farmácia|parafarmacia"; then
+        inv_type="Farmacia"
+    elif echo "$file_content" | grep -qiE "adobe|microsoft|google play|app store|netflix|spotify|github|aws |amazon web"; then
         inv_type="Software"
-    elif echo "$file_content" | grep -qE "restaurant|auschan|mercadona"; then
+    #elif echo "$file_content" | grep -qiE "amazon\."; then
+    #    inv_type="Amazon"
+    elif echo "$file_content" | grep -qiE "uber|bolt (taxa|viagem)|táxi|taxi|cp |comboios|metro |autocarro|flixbus|renfe"; then
+        inv_type="Transporte"
+    elif echo "$file_content" | grep -qiE "parque|estacionamento|emel|parking"; then
+        inv_type="Estacionamento"
+    elif echo "$file_content" | grep -qiE "hotel|hostel|airbnb|booking\.com|alojamento"; then
+        inv_type="Alojamento"
+    elif echo "$file_content" | grep -qiE "mercad|continent|pingo doc|lidl|aldi|miniprec|jumbo|intermarch|worten|fnac|leroy mer|ikea|decathlon|irmadona|supermerc"; then
         inv_type="Refeicao"
-    elif echo "$file_content" | grep -q "total" && echo "$file_content" | grep -q "iva"; then
-        inv_type="Recibo"
+    elif echo "$file_content" | grep -qiE "restaurante|pastelaria|snack.bar|tasca|taberna|pizzar|hamburguer|mcdonald|burger king|kfc|subway|nando|sushi"; then
+        inv_type="Refeicao"
+    elif echo "$file_content" | grep -qiE "fatura simpl|recibo|total.*iva|iva.*total"; then
+        inv_type="Refeicao"
     else
-        inv_type="Misc"
+        inv_type="Refeicao"
     fi
 
     # 4. CONSTRUCT NEW NAME
