@@ -204,13 +204,16 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
     # 2. FIND DATE (REGEX)
     extracted_date=""
 
+    # Strip stray dots/spaces OCR inserts inside numbers (e.g. "2.026-0.4-12" -> "2026-04-12")
+    clean_content=$(echo "$file_content" | sed 's/\([0-9]\)[. ]\([0-9]\)/\1\2/g; s/\([0-9]\)[. ]\([0-9]\)/\1\2/g')
+
     # Priority 1: YYYY-MM-DD (also catches terminal timestamps like 2026-03-2113:28 via head)
-    extracted_date=$(echo "$file_content" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)
+    extracted_date=$(echo "$clean_content" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)
 
     # Priority 2: DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY -> convert to YYYY-MM-DD
     # (requires 4-digit year at end so terminal lines like "26-03-27 20:48" don't match)
     if [ -z "$extracted_date" ]; then
-        alt_date=$(echo "$file_content" | grep -oE '[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{4}' | head -n 1)
+        alt_date=$(echo "$clean_content" | grep -oE '[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{4}' | head -n 1)
         if [ ! -z "$alt_date" ]; then
             extracted_date=$(echo "$alt_date" | sed 's|[/.]|-|g' | awk -F- '{print $3"-"$2"-"$1}')
         fi
@@ -218,7 +221,7 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
 
     # Priority 3: YY-MM-DD followed by time (e.g. "26-03-13 21:18") -> prepend century
     if [ -z "$extracted_date" ]; then
-        short_date=$(echo "$file_content" | grep -oE '[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{2} *[0-9]{2}[;:][0-9]{2}' | head -n 1)
+        short_date=$(echo "$clean_content" | grep -oE '[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{2} *[0-9]{2}[;:][0-9]{2}' | head -n 1)
         if [ ! -z "$short_date" ]; then
             date_part=$(echo "$short_date" | grep -oE '^[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{2}')
             extracted_date=$(echo "$date_part" | sed 's|[/.]|-|g' | awk -F- '{print "20"$1"-"$2"-"$3}')
@@ -228,7 +231,7 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
     # Priority 4: Partial date -MM-DD or MM-DD followed by time (OCR truncated year)
     # Assumes current year
     if [ -z "$extracted_date" ]; then
-        partial_date=$(echo "$file_content" | grep -oE '[-]?[0-9]{2}-[0-9]{2} *[0-9]{2}[;:][0-9]{2}' | head -n 1)
+        partial_date=$(echo "$clean_content" | grep -oE '[-]?[0-9]{2}-[0-9]{2} *[0-9]{2}[;:][0-9]{2}' | head -n 1)
         if [ ! -z "$partial_date" ]; then
             mm_dd=$(echo "$partial_date" | grep -oE '[0-9]{2}-[0-9]{2}' | head -n 1)
             current_year=$(date +%Y)
