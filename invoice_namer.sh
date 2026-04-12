@@ -204,8 +204,9 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
     # 2. FIND DATE (REGEX)
     extracted_date=""
 
-    # Strip stray dots/spaces OCR inserts inside numbers (e.g. "2.026-0.4-12" -> "2026-04-12")
-    clean_content=$(echo "$file_content" | sed 's/\([0-9]\)[. ]\([0-9]\)/\1\2/g; s/\([0-9]\)[. ]\([0-9]\)/\1\2/g')
+    # Strip stray dots OCR inserts inside digits (e.g. "2.026-0.4-12" -> "2026-04-12")
+    # Only dots, not spaces — spaces are valid date/time separators
+    clean_content=$(echo "$file_content" | sed 's/\([0-9]\)\.\([0-9]\)/\1\2/g; s/\([0-9]\)\.\([0-9]\)/\1\2/g')
 
     # Priority 1: YYYY-MM-DD (also catches terminal timestamps like 2026-03-2113:28 via head)
     extracted_date=$(echo "$clean_content" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)
