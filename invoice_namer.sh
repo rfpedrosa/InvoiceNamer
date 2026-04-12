@@ -8,12 +8,13 @@
 DRY_RUN=false
 TARGET_DIR=""
 PREPROCESS=false
+SUFFIX=""
 
 # Function to print usage
 usage() {
-    echo "Usage: $0 <directory_path> [--dry-run] [--preprocess]"
+    echo "Usage: $0 <directory_path> [--dry-run] [--preprocess] [--suffix <suffix>]"
     echo "Example: $0 ~/Desktop/Invoices --dry-run"
-    echo "         $0 ~/Desktop/Invoices --preprocess"
+    echo "         $0 ~/Desktop/Invoices --suffix CompanyName"
     exit 1
 }
 
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
     --preprocess)
       PREPROCESS=true
       shift # Remove --preprocess from processing
+      ;;
+    --suffix)
+      SUFFIX="$2"
+      shift 2 # Remove --suffix and its value
       ;;
     -h|--help)
       usage
@@ -282,7 +287,11 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
     clean_original="${filename%.*}"
     clean_original="${clean_original// /_}"
 
-    base_name="${file_date}_${inv_type}"
+    if [ ! -z "$SUFFIX" ]; then
+        base_name="${file_date}_${inv_type}_${SUFFIX}"
+    else
+        base_name="${file_date}_${inv_type}"
+    fi
     new_name="${base_name}.${ext}"
     new_path="$TARGET_DIR/$new_name"
 
