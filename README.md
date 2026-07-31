@@ -104,11 +104,23 @@ The script automatically chooses the best available OCR engine:
 | **Apple Vision** | ⭐⭐⭐⭐⭐ | Fast | Same as iPhone Live Text; requires `vision_ocr.py` |
 | **Tesseract** | ⭐⭐ | Medium | Open-source fallback |
 
-### 2. Date Extraction Priority
+### 2. Date Extraction
 
-1. **YYYY-MM-DD** format (e.g., `2024-03-15`)
-2. **DD/MM/YYYY** format (e.g., `15/03/2024`) — converted to YYYY-MM-DD
-3. **File creation date** — used if no date found in text
+Photos of receipts are often sideways in the frame with no EXIF orientation tag,
+and Vision does not rotate them by itself. `vision_ocr.py` therefore runs the OCR
+at all four 90° orientations and keeps the most confident reading.
+
+`extract_date.py` then collects **every** date printed on the receipt rather than
+taking the first one:
+
+- **YYYY-MM-DD** (e.g. `2026-03-15`)
+- **DD/MM/YYYY** (e.g. `15/03/2026`)
+- **YY-MM-DD** — the format Portuguese payment terminals print
+- Any of the above with characters mangled by OCR (`15.-07-2026`, `20?6-07-26`)
+
+A receipt normally prints its date twice (terminal timestamp and emission date),
+so the date with the most agreement wins; ties go to the most recent. If nothing
+plausible is found, the **file creation date** is used.
 
 ### 3. Type Detection Keywords
 
@@ -205,7 +217,8 @@ Look for:
 ```
 .
 ├── invoice_namer.sh      # Main shell script
-├── vision_ocr.py         # Apple Vision OCR helper
+├── vision_ocr.py         # Apple Vision OCR helper (tries all 4 orientations)
+├── extract_date.py       # Picks the best-supported date out of the OCR text
 ├── README.md             # Documentation
 ├── .gitignore            # Git ignore rules
 └── .invoice_ocr_venv/    # Python virtualenv (auto-created, gitignored)
@@ -215,7 +228,7 @@ Look for:
 
 - **Safe Operation:** The script never deletes files, only renames them
 - **Collision Handling:** If target filename exists, appends `_1`, `_2`, etc., gitignored)
-- **Performance:** Apple Vision processes ~2-5 images/second; Tesseract is slower
+- **Performance:** Apple Vision reads roughly one image per second (four orientation passes each); Tesseract is slower
 
 ## Version Control
 

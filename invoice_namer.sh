@@ -79,7 +79,13 @@ fi
 # Check for Apple Vision OCR (best quality — same engine as Live Text)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VISION_HELPER="$SCRIPT_DIR/vision_ocr.py"
+DATE_HELPER="$SCRIPT_DIR/extract_date.py"
 USE_VISION=false
+
+if [[ ! -f "$DATE_HELPER" ]]; then
+    echo "❌ Error: extract_date.py not found next to script."
+    exit 1
+fi
 
 # pyobjc supports Python 3.8–3.13 only (3.14+ not yet supported).
 # Prefer specific versioned Homebrew Pythons in order, avoiding 3.14+.
@@ -206,50 +212,12 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
     fi
     echo "   -> OCR Content: $file_content"
 
-    # 2. FIND DATE (REGEX)
-    extracted_date=""
+    # 2. FIND DATE
+    # extract_date.py collects every date printed on the receipt (terminal
+    # timestamp, emission date, ...) and returns the best-supported one.
+    extracted_date=$(echo "$file_content" | "$PYTHON3" "$DATE_HELPER" 2>/dev/null)
 
-    # Strip stray dots OCR inserts inside digits (e.g. "2.026-0.4-12" -> "2026-04-12")
-    # Only dots, not spaces — spaces are valid date/time separators
-    clean_content=$(echo "$file_content" | sed 's/\([0-9]\)\.\([0-9]\)/\1\2/g; s/\([0-9]\)\.\([0-9]\)/\1\2/g')
-
-    # Priority 1: YYYY-MM-DD (also catches terminal timestamps like 2026-03-2113:28 via head)
-    extracted_date=$(echo "$clean_content" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -n 1)
-
-    # Priority 2: DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY -> convert to YYYY-MM-DD
-    # (requires 4-digit year at end so terminal lines like "26-03-27 20:48" don't match)
-    if [ -z "$extracted_date" ]; then
-        alt_date=$(echo "$clean_content" | grep -oE '[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{4}' | head -n 1)
-        if [ ! -z "$alt_date" ]; then
-            extracted_date=$(echo "$alt_date" | sed 's|[/.]|-|g' | awk -F- '{print $3"-"$2"-"$1}')
-        fi
-    fi
-
-    # Priority 3: YY-MM-DD followed by time (e.g. "26-03-13 21:18") -> prepend century
-    if [ -z "$extracted_date" ]; then
-        short_date=$(echo "$clean_content" | grep -oE '[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{2} *[0-9]{2}[;:][0-9]{2}' | head -n 1)
-        if [ ! -z "$short_date" ]; then
-            date_part=$(echo "$short_date" | grep -oE '^[0-9]{2}[-/.][0-9]{2}[-/.][0-9]{2}')
-            extracted_date=$(echo "$date_part" | sed 's|[/.]|-|g' | awk -F- '{print "20"$1"-"$2"-"$3}')
-        fi
-    fi
-
-    # Priority 4: Partial date -MM-DD or MM-DD followed by time (OCR truncated year)
-    # Assumes current year
-    if [ -z "$extracted_date" ]; then
-        partial_date=$(echo "$clean_content" | grep -oE '[-]?[0-9]{2}-[0-9]{2} *[0-9]{2}[;:][0-9]{2}' | head -n 1)
-        if [ ! -z "$partial_date" ]; then
-            mm_dd=$(echo "$partial_date" | grep -oE '[0-9]{2}-[0-9]{2}' | head -n 1)
-            current_year=$(date +%Y)
-            month="${mm_dd%%-*}"
-            day="${mm_dd##*-}"
-            if [ "$month" -ge 1 ] && [ "$month" -le 12 ] && [ "$day" -ge 1 ] && [ "$day" -le 31 ]; then
-                extracted_date="${current_year}-${month}-${day}"
-            fi
-        fi
-    fi
-
-    # Priority 5: File Creation Date
+    # Fall back to the file creation date when the document yields nothing
     if [ -z "$extracted_date" ]; then
         echo "   -> No date found in text. Using file creation date."
         file_date=$(stat -f "%SB" -t "%Y-%m-%d" "$file")
@@ -259,7 +227,9 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
     fi
 
     # 3. DETERMINE TYPE (Based on content keywords)
-    if echo "$file_content" | grep -qiE "combustivel|gasoleo|gasolina|galp|prio|repsol|shell|bp |cepsa|posto de abastecimento"; then
+    # Short brand names need word boundaries — "bp" otherwise matches OCR noise
+    # in the middle of a word. A price per litre is the surest sign of fuel.
+    if echo "$file_content" | grep -qiE "combustivel|gasoleo|gasolina|galp|prio|repsol|shell|\bbp\b|cepsa|posto de abastecimento|eur/l|€/l"; then
         inv_type="Gasoleo"
     elif echo "$file_content" | grep -qiE "farmacia|farmácia|parafarmacia"; then
         inv_type="Farmacia"
@@ -267,7 +237,9 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
         inv_type="Software"
     #elif echo "$file_content" | grep -qiE "amazon\."; then
     #    inv_type="Amazon"
-    elif echo "$file_content" | grep -qiE "uber|bolt (taxa|viagem)|táxi|taxi|cp |comboios|metro |autocarro|flixbus|renfe"; then
+    # "cp" (Comboios de Portugal) is too short to match on its own — it turns up
+    # inside OCR noise on unrelated receipts, so require the full name.
+    elif echo "$file_content" | grep -qiE "uber|bolt (taxa|viagem)|táxi|taxi|comboios|\bmetro\b|autocarro|flixbus|renfe"; then
         inv_type="Transporte"
     elif echo "$file_content" | grep -qiE "parque|estacionamento|emel|parking"; then
         inv_type="Estacionamento"
