@@ -87,11 +87,11 @@ if [[ ! -f "$DATE_HELPER" ]]; then
     exit 1
 fi
 
-# pyobjc supports Python 3.8–3.13 only (3.14+ not yet supported).
-# Prefer specific versioned Homebrew Pythons in order, avoiding 3.14+.
+# pyobjc ships wheels for Python 3.9–3.13; newer pyobjc also builds on 3.14,
+# but it is tried last. Prefer specific versioned Homebrew Pythons in order.
 BREW_BIN="$(brew --prefix)/bin"
 PYTHON3=""
-for ver in python3.13 python3.12 python3.11; do
+for ver in python3.13 python3.12 python3.11 python3.14; do
     if [[ -x "$BREW_BIN/$ver" ]]; then
         PYTHON3="$BREW_BIN/$ver"
         break
@@ -100,28 +100,49 @@ done
 
 # If none found, install python@3.13 explicitly
 if [[ -z "$PYTHON3" ]]; then
-    echo "⚠️  No compatible Homebrew Python (3.11–3.13) found. Installing python@3.13..."
+    echo "⚠️  No compatible Homebrew Python (3.11–3.14) found. Installing python@3.13..."
     brew install python@3.13
     PYTHON3="$BREW_BIN/python3.13"
 fi
 
 echo "ℹ️  Using Python: $("$PYTHON3" --version 2>&1)"
 
-# Use a dedicated venv to avoid PEP 668 "externally managed" restrictions
+# Use a dedicated venv to avoid PEP 668 "externally managed" restrictions.
+# A venv holds only a symlink to the Python it was built from, so a Homebrew
+# upgrade or `brew cleanup` can leave it pointing at a binary that no longer
+# exists. Existing on disk proves nothing — run it before trusting it.
 VENV_DIR="$SCRIPT_DIR/.invoice_ocr_venv"
+VENV_PYTHON="$VENV_DIR/bin/python3"
+
+if [[ -d "$VENV_DIR" ]] && ! "$VENV_PYTHON" -c "pass" 2>/dev/null; then
+    echo "⚠️  Existing venv is stale (its Python was removed or upgraded). Rebuilding..."
+    rm -rf "$VENV_DIR"
+fi
+
 if [[ ! -d "$VENV_DIR" ]]; then
     echo "ℹ️  Creating virtual environment at $VENV_DIR..."
     "$PYTHON3" -m venv "$VENV_DIR"
 fi
-VENV_PYTHON="$VENV_DIR/bin/python3"
 
-if [[ -f "$VISION_HELPER" ]]; then
+VENV_OK=false
+if "$VENV_PYTHON" -c "pass" 2>/dev/null; then
+    VENV_OK=true
+else
+    echo "⚠️  Could not build a working venv. Falling back to $PYTHON3 directly."
+fi
+
+if [[ "$VENV_OK" = true ]] && [[ -f "$VISION_HELPER" ]]; then
     if "$VENV_PYTHON" -c "import Vision" 2>/dev/null; then
         USE_VISION=true
         echo "✅ Apple Vision OCR is ready (best quality)."
     else
         echo "⚠️  pyobjc-framework-Vision not found. Installing into venv..."
-        "$VENV_PYTHON" -m pip install pyobjc-framework-Vision --quiet
+        "$VENV_PYTHON" -m pip install --upgrade pip --quiet 2>/dev/null
+        # Surface pip's own error instead of swallowing it — a silent failure
+        # here is what silently downgrades every later scan to Tesseract.
+        if ! "$VENV_PYTHON" -m pip install pyobjc-framework-Vision --quiet; then
+            echo "   └─ pip install failed (see output above)."
+        fi
         if "$VENV_PYTHON" -c "import Vision" 2>/dev/null; then
             USE_VISION=true
             echo "✅ Apple Vision OCR installed and ready."
@@ -129,11 +150,17 @@ if [[ -f "$VISION_HELPER" ]]; then
             echo "⚠️  Could not install Apple Vision bindings. Falling back to Tesseract."
         fi
     fi
-else
+elif [[ ! -f "$VISION_HELPER" ]]; then
     echo "⚠️  vision_ocr.py not found next to script. Falling back to Tesseract."
 fi
-# All Vision calls use the venv python
-PYTHON3="$VENV_PYTHON"
+
+# vision_ocr.py needs the venv (pyobjc lives there); extract_date.py is
+# stdlib-only, so it stays on $PYTHON3 and keeps working even if the venv does not.
+if [[ "$VENV_OK" = true ]]; then
+    VISION_PYTHON="$VENV_PYTHON"
+else
+    VISION_PYTHON="$PYTHON3"
+fi
 
 if ! command -v convert &> /dev/null; then
     if [ "$PREPROCESS" = true ]; then
@@ -193,10 +220,10 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
         if [ "$PREPROCESS" = true ]; then
             tmp_img=$(mktemp /tmp/invoice_preprocess_XXXXXX.png)
             convert "$file" -colorspace Gray -resize 200% -normalize -sharpen 0x1.5 "$tmp_img" 2>/dev/null
-            file_content=$("$PYTHON3" "$VISION_HELPER" "$tmp_img" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+            file_content=$("$VISION_PYTHON" "$VISION_HELPER" "$tmp_img" 2>/dev/null | tr '[:upper:]' '[:lower:]')
             rm -f "$tmp_img"
         else
-            file_content=$("$PYTHON3" "$VISION_HELPER" "$file" 2>/dev/null | tr '[:upper:]' '[:lower:]')
+            file_content=$("$VISION_PYTHON" "$VISION_HELPER" "$file" 2>/dev/null | tr '[:upper:]' '[:lower:]')
         fi
     else
         # Tesseract fallback
@@ -209,6 +236,9 @@ for file in "$TARGET_DIR"/*.{png,jpg,jpeg,PNG,JPG,JPEG}(N); do
         fi
         file_content=$(tesseract "$ocr_source" - --oem 1 --psm 6 -l por+eng 2>/dev/null | tr '[:upper:]' '[:lower:]')
         [ "$PREPROCESS" = true ] && rm -f "$tmp_img"
+    fi
+    if [[ -z "${file_content//[[:space:]]/}" ]]; then
+        echo "   ⚠️  OCR returned no text — try --preprocess or a sharper photo."
     fi
     echo "   -> OCR Content: $file_content"
 

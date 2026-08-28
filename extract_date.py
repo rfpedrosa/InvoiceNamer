@@ -33,13 +33,27 @@ LOOKALIKE = str.maketrans(
 )
 
 SEP = r"[-/.,]{1,3}"
+# Invoices often space the parts out instead ("28 08 2026"). Only horizontal
+# space counts — allowing newlines would join unrelated numbers across lines.
+SEP_WIDE = r"[-/., \t]{1,3}"
+# On low-contrast print Vision reads the "/" of a date as a "1", collapsing
+# "01/08/2026" into "0110812026". Treating "1" as a separator is only safe
+# because _valid() throws out impossible months and days, and because the
+# vote below prefers a date that several readings agree on.
+SEP_OCR = r"[-/.,1]{1,3}"
 
 # YYYY-MM-DD (separators may be misread, e.g. "2026-07.20")
-RE_YMD = re.compile(rf"(?<!\d)(\d{{4}}){SEP}(\d{{1,2}}){SEP}(\d{{1,2}})(?!\d)")
+RE_YMD = re.compile(rf"(?<!\d)(\d{{4}}){SEP_WIDE}(\d{{1,2}}){SEP_WIDE}(\d{{1,2}})(?!\d)")
 # DD-MM-YYYY (e.g. "15.-07-2026")
-RE_DMY = re.compile(rf"(?<!\d)(\d{{1,2}}){SEP}(\d{{1,2}}){SEP}(\d{{4}})(?!\d)")
+RE_DMY = re.compile(rf"(?<!\d)(\d{{1,2}}){SEP_WIDE}(\d{{1,2}}){SEP_WIDE}(\d{{4}})(?!\d)")
 # YY-MM-DD — the format Portuguese payment terminals print
 RE_YYMD = re.compile(rf"(?<!\d)(\d{{2}}){SEP}(\d{{2}}){SEP}(\d{{2}})(?!\d)")
+# DD-MM-YY — the same three numbers the other way round, as hotels and
+# rentals print stay dates. Both readings are scanned and voted on.
+RE_DMYY = re.compile(rf"(?<!\d)(\d{{2}}){SEP_OCR}(\d{{2}}){SEP_OCR}(\d{{2}})(?!\d)")
+# The three above again, but with "1" allowed as a mangled separator.
+RE_YMD_OCR = re.compile(rf"(?<!\d)(\d{{4}}){SEP_OCR}(\d{{1,2}}){SEP_OCR}(\d{{1,2}})(?!\d)")
+RE_DMY_OCR = re.compile(rf"(?<!\d)(\d{{1,2}}){SEP_OCR}(\d{{1,2}}){SEP_OCR}(\d{{4}})(?!\d)")
 # 20XX where one character of the year was misread entirely (e.g. "20?6-07-26")
 RE_FUZZY_YEAR = re.compile(rf"(?<!\d)(2[0oOQ]\S{{2}}){SEP}(\d{{1,2}}){SEP}(\d{{1,2}})(?!\d)")
 
@@ -75,17 +89,24 @@ def _scan(text: str, today: date) -> Counter:
     """Collect every plausible date in one rendering of the OCR text."""
     found = Counter()
 
-    for year, month, day in RE_YMD.findall(text):
-        hit = _valid(int(year), int(month), int(day), today)
-        if hit:
-            found[hit] += 1
+    for pattern in (RE_YMD, RE_YMD_OCR):
+        for year, month, day in pattern.findall(text):
+            hit = _valid(int(year), int(month), int(day), today)
+            if hit:
+                found[hit] += 1
 
-    for day, month, year in RE_DMY.findall(text):
-        hit = _valid(int(year), int(month), int(day), today)
-        if hit:
-            found[hit] += 1
+    for pattern in (RE_DMY, RE_DMY_OCR):
+        for day, month, year in pattern.findall(text):
+            hit = _valid(int(year), int(month), int(day), today)
+            if hit:
+                found[hit] += 1
 
     for year, month, day in RE_YYMD.findall(text):
+        hit = _valid(2000 + int(year), int(month), int(day), today)
+        if hit:
+            found[hit] += 1
+
+    for day, month, year in RE_DMYY.findall(text):
         hit = _valid(2000 + int(year), int(month), int(day), today)
         if hit:
             found[hit] += 1
@@ -109,6 +130,11 @@ def _strip_dots(text: str) -> str:
     return text
 
 
+def _split_time(text: str) -> str:
+    """Re-separate a date that ran into the time behind it ("2026-08-2113:08")."""
+    return re.sub(r"(\d)(\d{2}:\d{2})", r"\1 \2", text)
+
+
 def extract_date(text: str, today: date = None):
     """Pick the best-supported date from OCR text, or None."""
     today = today or date.today()
@@ -116,11 +142,13 @@ def extract_date(text: str, today: date = None):
     # Each rendering repairs a different class of OCR damage. Take the highest
     # count a date reaches in any one of them rather than the sum, so a date
     # that survives every repair is not credited several times over.
+    spaced = _split_time(text)
     renderings = (
         text,
-        _strip_dots(text),
-        text.translate(LOOKALIKE),
-        _strip_dots(text).translate(LOOKALIKE),
+        spaced,
+        _strip_dots(spaced),
+        spaced.translate(LOOKALIKE),
+        _strip_dots(spaced).translate(LOOKALIKE),
     )
 
     votes = Counter()
